@@ -1,0 +1,7 @@
+{
+    "list": "`help`   Lists all available commands\n`hug`     Hugs someone\n`poll`   Creates a poll",
+    "help": "**Lists all available commands**\n\n`/help <?command>`\n\n`<?command>` is optional. If given, instead of listing all commands available to you, it gives details on one specific command.",
+    "hug": "**Hugs someone**\n\n`hug <target>`\n\n`<target>` may be omitted if you reply to another message when using the command. The sender of the aforementioned message is assumed as `<target>`\nIn the case that there is no message being replied to, and `<target>` is unspecified, then the sender of the message last sent in the current channel is assumed",
+    "poll": "**Creates a poll**\n\n`poll <title> <options>`\n\n`<title>` is question you ask in your poll\n\n`<options>` are all the available responses to your poll, maximum of 8. Separate each option with a comma.\nex. `/poll Which is better? Cats,Dogs`",
+    "unknown": "Unknown command. Run `/help` to see all options."
+}
