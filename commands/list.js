@@ -1,83 +1,125 @@
-let { SlashCommandBuilder } = require('@discordjs/builders');
-let { MessageEmbed } = require('discord.js');
-let { MessageActionRow, MessageButton, Modal } = require('discord.js');
-let { host, user, password, database } = require('../db-config.json');
+let { SlashCommandBuilder } = require("@discordjs/builders");
+let { EmbedBuilder, Events } = require("discord.js");
 
-let client = require('../instances').client;
+let { upperButtonRow, lowerButtonRow, buildListMessage } = require("../utils/list/message");
+let listModals = require("../utils/list/modals");
 
-let mysql = require('mysql2');
-let connection = mysql.createConnection({
-    host: host,
-    user: user,
-    password: password,
-    database: database
+let CommandEntry = require("../database/models/command_entry");
+let Task = require("../database/models/task");
+let List = require("../database/models/list");
+let { dbPool } = require("../database/pool");
+
+let client = require("../client");
+
+client.on(Events.InteractionCreate, async interaction => {
+    let list = new List(dbPool);
+    if (interaction.isButton()) {
+        let commandEntry = new CommandEntry(dbPool);
+        let rows = await commandEntry.fetchCommandMessages(interaction.message.id, "list");
+        if (rows > 0) return;
+
+        dispatchButtonInteraction(interaction);
+    }
+    else if (interaction.isModalSubmit()) {
+        let listRows = await list.fetchById(interaction.message.id);
+        let listId = listRows[0]["list_id"];
+
+        dispatchModalSubmission(interaction, listId);
+
+        let task = new Task(dbPool);
+        let taskRows = task.fetchById(listId);
+        let listEmbed = new buildListMessage(listRows, taskRows);
+        await interaction.editReply({ embeds: [listEmbed] });
+    }
 });
 
-connection.connect();
+async function dispatchButtonInteraction(interaction) {
+    switch (interaction.customId) {
+        case "addTask": {
+            let addTaskModal = listModals.createAddTaskModal();
+            await interaction.showModal(addTaskModal);
+            break;
+        }
 
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton())
-        return;
-    else
-        dispatchInteraction(interaction);
-});
+        default:
+            break;
+    }
+}
 
-function dispatchInteraction(interaction) {
-    console.log(`Interaction ${interaction.id}`);
+async function dispatchModalSubmission(interaction, listId) {
+    switch (interaction.customId) {
+        case "addTaskDialog": {
+            let task = new Task(dbPool);
+            let taskName = interaction.fields.getTextInputValue("taskName");
+            let taskAssignee = interaction.fields.getTextInputValue("taskAssignee");
+            task.add(listId, taskName, taskAssignee);
+            break;
+        }
+
+        default:
+            break;
+    }
 }
 
 module.exports = {
     data: new SlashCommandBuilder()
-        .setName('list')
-        .setDescription('Manages a list of projects')
-        .addStringOption(option => option.setName('title')
-            .setDescription('Title to name the project')
+        .setName("list")
+        .setDescription("Manages a list of projects")
+        .addStringOption(option => option.setName("list_name")
+            .setDescription("Name of the project")
+            .setRequired(true))
+        .addBooleanOption(option => option.setName("new_list_flag")
+            .setDescription("Should create a new project or search for existing project")
             .setRequired(true)),
     async execute(interaction) {
-        let channelId = interaction.channelId;
-        let user = interaction.member;
-        let userRoles = interaction.member.roles;
+        let member = interaction.member;
+        let memberRoles = interaction.member.roles;
+        let isNewList = interaction.options.getBoolean("new_list_flag");
+        let listName = interaction.options.getString("list_name").trim();
 
-        let title = interaction.options.getString('title');
+        let list = new List(dbPool);
 
-        let taskEmbed = new MessageEmbed()
-            .setTitle(`${title}`)
-            .setDescription(`Created by ${user}.\nDue date not set, **Edit Task Info** button to set.\nNo tasks are added.`)
-            .setTimestamp();
+        if (isNewList) {
+            if (listName.search(/^[a-z]\w{2,}$/i) == -1) {
+                interaction.reply({
+                    content: "Invalid list name.\nMust start with a letter and at least 3 characters (a-z, A-Z, 0-9, or _).",
+                    ephemeral: true });
+                return;
+            }
+            let existingLists = await list.search(listName, member.id);
+            if (existingLists.length > 0) {
+                interaction.reply({
+                    content: "List of this name already exists",
+                    ephemeral: true });
+                return;
+            }
 
-        let row1 = new MessageActionRow()
-            .addComponents(
-                new MessageButton()
-                    .setCustomId('add_task')
-                    .setLabel('Add Task')
-                    .setStyle('PRIMARY'),
-                new MessageButton()
-                    .setCustomId('edit_task_info')
-                    .setLabel('Edit Task Info')
-                    .setStyle('SECONDARY'),
-                new MessageButton()
-                    .setCustomId('edit_tasks')
-                    .setLabel('Edit Task')
-                    .setStyle('SECONDARY'),
-                new MessageButton()
-                    .setCustomId('remove_task')
-                    .setLabel('Remove Task')
-                    .setStyle('DANGER'),
-                new MessageButton()
-                    .setCustomId('mark_task')
-                    .setLabel('Mark Task')
-                    .setStyle('SUCCESS'));
-            let row2 = new MessageActionRow()
-            .addComponents(
-                new MessageButton()
-                    .setCustomId('mark_project')
-                    .setLabel('Mark Project')
-                    .setStyle('SUCCESS'),
-                new MessageButton()
-                    .setCustomId('remove_project')
-                    .setLabel('Remove Project')
-                    .setStyle('DANGER'));
+            let listEmbed = new EmbedBuilder()
+                .setTitle(`${listName}`)
+                .setDescription(`Created by ${member}.\nDue date not set, click **Edit Task Info** button to set.\nNo tasks are added.`)
+                .setTimestamp();
 
-        await interaction.reply({ embeds: [taskEmbed], components: [row1, row2] });
-    }
+            let replyMessage = await interaction.reply({ embeds: [listEmbed], components: [upperButtonRow, lowerButtonRow] });
+            list.add(replyMessage.id, member.id, listName);
+        }
+        else {
+            let listRows = await list.search(listName, member.id);
+            if (listRows.length < 1) {
+                await interaction.reply({
+                    content: "No results found",
+                    ephemeral: true,
+                });
+            }
+            let replyMessage = await interaction.reply("Preparing list...");
+            let list_id = listRows[0]["list_id"];
+            list.updateMessageId(list_id, replyMessage.id);
+
+            let task = new Task(dbPool);
+            let taskRows = await task.fetchById(list_id);
+
+            let listEmbed = new buildListMessage(listRows[0], taskRows);
+
+            await interaction.editReply({ embeds: [listEmbed], components: [upperButtonRow, lowerButtonRow] });
+        }
+    },
 };

@@ -1,34 +1,34 @@
 // Regular Discord imports
-let SlashCommandBuilder = require('@discordjs/builders').SlashCommandBuilder;
-let MessageAttachment = require('discord.js').MessageAttachment;
+let { SlashCommandBuilder } = require('@discordjs/builders');
+let { MessageAttachment } = require('discord.js');
 
 // Importing graphics
 let Canvas = require('canvas');
-let client = require('../instances').client;
-let graphics = require("../utils/poll/graphics.js");
-
-// Setting up MySql 
-let mysql      = require('mysql2');
-let { host, user, password, database } = require('../db-config.json');
-let connection = mysql.createConnection({
-  host: host,
-  user: user,
-  password: password,
-  database: database
-});
-
-connection.connect();
+let { client } = require('../instances');
+let graphics = require('../utils/poll/graphics.js');
 
 // Tools and config
-let management = require("../utils/poll/management.js");
-let config = require("../config/poll.json");
+let management = require('../utils/poll/management.js');
+let config = require('../config/poll.json');
+
+// Database pool instance
+let pool = require('../database/instance');
 
 // Listen for button interactions
 client.on('interactionCreate', async interaction => {
-	if (!interaction.isButton()) return;
+
+    // Exit if command interaction
+	if (interaction.isCommand()) return;
+
+    // Exit if this message was not created with a poll command.
+    if (!interaction.replied) return;
+
+    let replyMessage = await interaction.fetchReply();
+    let recentCommands = await pool.promise().query(`SELECT FROM recent_commands WHERE messageId = ${replyMessage.id} AND commandName = poll`);
+    if (recentCommands.length == 0) return;
 
     // Search for a poll with the same messageId as the interaction
-    let poll = (await connection.promise().query(`SELECT * FROM polls WHERE messageId = ${interaction.message.interaction.id}`))[0][0].data;
+    let poll = await pool.promise().query(`SELECT * FROM poll WHERE messageId = ${replyMessage.id}`);
 
     // Information about the button press
     let user_id = interaction.user.id;
@@ -49,7 +49,7 @@ client.on('interactionCreate', async interaction => {
     poll.votes[poll.options.indexOf(button)] += 1;
 
     // Update the entry in the database to reflect these changes
-    connection.query(`UPDATE polls SET data = \'${JSON.stringify(poll)}\' WHERE messageId = ${interaction.message.interaction.id}`);
+    pool.query(`UPDATE polls SET data = \'${JSON.stringify(poll)}\' WHERE messageId = ${interaction.message.interaction.id}`);
     
     // Create an image to draw on matching the width and height given in the config
     let canvas = Canvas.createCanvas(config.general.width, config.general.height);
@@ -126,7 +126,7 @@ module.exports = {
         let items = management.constructItems(poll.options, poll.votes, poll.sum);
 
         // Save all the poll options in the database
-        connection.query(`INSERT INTO polls VALUES (\'${JSON.stringify(poll)}\', \'${interaction.id}\')`);
+        pool.query(`INSERT INTO polls VALUES (\'${JSON.stringify(poll)}\', \'${interaction.id}\')`);
 
         // Draw all the elements based on the config
         graphics.drawBackground(
@@ -160,6 +160,8 @@ module.exports = {
         let buttons = management.createButtons(options);
 
         await interaction.reply({ files: [attachment], components: buttons });
+        let replyMessage = await interaction.fetchReply();
+        return replyMessage;
 	},
 };
 
