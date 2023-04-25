@@ -1,3 +1,5 @@
 node_modules
 config.json
+config_dev_test.json
+commands_dev_test
 .vscode
